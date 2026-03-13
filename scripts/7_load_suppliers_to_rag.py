@@ -1,36 +1,35 @@
 """
-Load pharmaceutical suppliers into PostgreSQL + pgvector RAG database
+Load pharmaceutical suppliers into FAISS vector database
+FAISS = Easiest setup, no database installation needed!
 """
 
 import pandas as pd
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import PGVector
+from langchain.vectorstores import FAISS
 from langchain.docstore.document import Document
 import os
 
-def load_suppliers_to_rag():
+def load_suppliers_to_faiss():
     """
-    Load supplier CSV into vector database for RAG
+    Load supplier CSV into FAISS vector database
     """
-
-    print("📥 Loading suppliers into RAG database...\n")
-
+    
+    print("📥 Loading suppliers into FAISS database...\n")
+    
     # Load supplier CSV
     csv_path = 'data/suppliers/pharma_suppliers.csv'
-
+    
     if not os.path.exists(csv_path):
         print(f"❌ Error: {csv_path} not found")
-        print("Run scripts/2_generate_pharma_suppliers.py first")
         return
-
+    
     df = pd.read_csv(csv_path)
     print(f"✓ Loaded {len(df)} suppliers from CSV")
-
+    
     # Convert each supplier to a document
     documents = []
-
+    
     for _, row in df.iterrows():
-        # Create rich text description
         text = f"""
 Supplier: {row['company_name']}
 ID: {row['supplier_id']}
@@ -55,10 +54,9 @@ Quality & Compliance:
 Payment Terms: {row['payment_terms']}
 Credit Rating: {row['credit_rating']}
 
-Contact: {row['contact_email']} | {row['phone']}
+Contact: {row['contact_email']}
         """.strip()
-
-        # Create document with metadata
+        
         doc = Document(
             page_content=text,
             metadata={
@@ -69,68 +67,51 @@ Contact: {row['contact_email']} | {row['phone']}
                 "cold_chain": bool(row['cold_chain_capable']),
                 "cdsco_approved": bool(row['cdsco_approved']),
                 "price": float(row['unit_price_inr']),
-                "lead_time": int(row['lead_time_days']),
-                "reliability": float(row['reliability_score'])
+                "lead_time": int(row['lead_time_days'])
             }
         )
         documents.append(doc)
-
+    
     print(f"✓ Created {len(documents)} document objects")
-
+    
     # Create embeddings model
-    print("\n📊 Creating embeddings (this may take 2-3 minutes)...")
-
+    print("\n📊 Creating embeddings (2-3 minutes)...")
+    
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={'device': 'cpu'},
-        encode_kwargs={'normalize_embeddings': True}
+        model_kwargs={'device': 'cpu'}
     )
-
+    
     print("✓ Embeddings model loaded")
-
-    # PostgreSQL connection string
-    # Change this if you have a password or different setup
-    CONNECTION_STRING = "postgresql://localhost:5433/pharma_supply_chain"
-
-    print(f"\n🗄️  Storing in PostgreSQL database...")
-    print(f"   Connection: {CONNECTION_STRING}")
-
-    try:
-        # Create vector store
-        vectorstore = PGVector.from_documents(
-            documents=documents,
-            embedding=embeddings,
-            collection_name="pharma_suppliers",
-            connection_string=CONNECTION_STRING,
-            pre_delete_collection=True  # Clear existing data
-        )
-
-        print(f"\n✅ SUCCESS!")
-        print(f"   Loaded {len(documents)} suppliers into RAG database")
-        print(f"   Collection name: pharma_suppliers")
-        print(f"   Database: pharma_supply_chain")
-
-        # Test search
-        print(f"\n🔍 Testing search functionality...")
-        results = vectorstore.similarity_search(
-            "Find insulin suppliers in India with cold chain",
-            k=3
-        )
-
-        print(f"✓ Test search returned {len(results)} results")
-        print(f"\nTop result:")
-        print(results[0].page_content[:200] + "...")
-
-        return vectorstore
-
-    except Exception as e:
-        print(f"\n❌ Error connecting to database:")
-        print(f"   {str(e)}")
-        print(f"\nTroubleshooting:")
-        print(f"   1. Is PostgreSQL running? (brew services list)")
-        print(f"   2. Does database exist? (psql -l)")
-        print(f"   3. Is pgvector installed? (psql pharma_supply_chain -c '\\dx')")
-        return None
+    
+    # Create FAISS vector store
+    print(f"\n🗄️  Creating FAISS database...")
+    
+    vectorstore = FAISS.from_documents(
+        documents=documents,
+        embedding=embeddings
+    )
+    
+    # Save to disk (persistent storage)
+    os.makedirs('database', exist_ok=True)
+    vectorstore.save_local("database/faiss_suppliers")
+    
+    print(f"\n✅ SUCCESS!")
+    print(f"   Loaded {len(documents)} suppliers into FAISS")
+    print(f"   Saved to: database/faiss_suppliers/")
+    
+    # Test search
+    print(f"\n🔍 Testing search...")
+    results = vectorstore.similarity_search(
+        "Find insulin suppliers in India with cold chain",
+        k=3
+    )
+    
+    print(f"✓ Test search returned {len(results)} results")
+    print(f"\nTop result:")
+    print(results[0].page_content[:200] + "...")
+    
+    return vectorstore
 
 if __name__ == "__main__":
-    load_suppliers_to_rag()
+    load_suppliers_to_faiss()
