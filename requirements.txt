@@ -1,28 +1,18 @@
 # Data generation
 faker==19.12.0
 pandas==2.1.3
-
-# GDELT API
 requests==2.31.0
 
-# Database (for teammate 2)
-psycopg2-binary==2.9.9
-pgvector==0.2.3
+# Vector database - FAISS (NO PostgreSQL needed!)
+faiss-cpu==1.7.4
 
-# LangChain & RAG (for teammate 2)
+# LangChain & RAG
 langchain==0.1.0
 sentence-transformers==2.2.2
-huggingface-hub==0.19.4
 
-# LLM (for teammate 2)
-ollama>=0.0.50
+# LLM
+ollama==0.1.6
 
-# Streamlit (for Week 2 app)
+# Streamlit (Week 2)
 streamlit==1.29.0
 plotly==5.18.0
-
-# Utilities
-python-dotenv==1.0.0
-
-
-
