@@ -1,5 +1,3 @@
-# Create requirements.txt file
-cat > requirements.txt << 'EOF'
 # Data generation
 faker==19.12.0
 pandas==2.1.3
@@ -17,7 +15,7 @@ sentence-transformers==2.2.2
 huggingface-hub==0.19.4
 
 # LLM (for teammate 2)
-ollama==0.1.6
+ollama>=0.0.50
 
 # Streamlit (for Week 2 app)
 streamlit==1.29.0
@@ -25,7 +23,6 @@ plotly==5.18.0
 
 # Utilities
 python-dotenv==1.0.0
-EOF
 
-# Install dependencies
-pip install -r requirements.txt
+
+
