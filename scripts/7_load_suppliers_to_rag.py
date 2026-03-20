@@ -4,31 +4,31 @@ FAISS = Easiest setup, no database installation needed!
 """
 
 import pandas as pd
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.docstore.document import Document
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
 import os
 
 def load_suppliers_to_faiss():
     """
     Load supplier CSV into FAISS vector database
     """
-    
+
     print("📥 Loading suppliers into FAISS database...\n")
-    
+
     # Load supplier CSV
     csv_path = 'data/suppliers/pharma_suppliers.csv'
-    
+
     if not os.path.exists(csv_path):
         print(f"❌ Error: {csv_path} not found")
         return
-    
+
     df = pd.read_csv(csv_path)
     print(f"✓ Loaded {len(df)} suppliers from CSV")
-    
+
     # Convert each supplier to a document
     documents = []
-    
+
     for _, row in df.iterrows():
         text = f"""
 Supplier: {row['company_name']}
@@ -56,7 +56,7 @@ Credit Rating: {row['credit_rating']}
 
 Contact: {row['contact_email']}
         """.strip()
-        
+
         doc = Document(
             page_content=text,
             metadata={
@@ -71,46 +71,46 @@ Contact: {row['contact_email']}
             }
         )
         documents.append(doc)
-    
+
     print(f"✓ Created {len(documents)} document objects")
-    
+
     # Create embeddings model
     print("\n📊 Creating embeddings (2-3 minutes)...")
-    
+
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={'device': 'cpu'}
     )
-    
+
     print("✓ Embeddings model loaded")
-    
+
     # Create FAISS vector store
     print(f"\n🗄️  Creating FAISS database...")
-    
+
     vectorstore = FAISS.from_documents(
         documents=documents,
         embedding=embeddings
     )
-    
+
     # Save to disk (persistent storage)
     os.makedirs('database', exist_ok=True)
     vectorstore.save_local("database/faiss_suppliers")
-    
+
     print(f"\n✅ SUCCESS!")
     print(f"   Loaded {len(documents)} suppliers into FAISS")
     print(f"   Saved to: database/faiss_suppliers/")
-    
+
     # Test search
     print(f"\n🔍 Testing search...")
     results = vectorstore.similarity_search(
         "Find insulin suppliers in India with cold chain",
         k=3
     )
-    
+
     print(f"✓ Test search returned {len(results)} results")
     print(f"\nTop result:")
     print(results[0].page_content[:200] + "...")
-    
+
     return vectorstore
 
 if __name__ == "__main__":

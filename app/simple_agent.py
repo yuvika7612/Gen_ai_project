@@ -1,14 +1,13 @@
 """
 Simple pharmaceutical supply chain agent
-Uses Llama3 + FAISS RAG
+Uses Llama3 + FAISS RAG + local GGUF model
 """
 
 import json
-from langchain_community.llms import Ollama
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from llama_cpp import Llama
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 
 
 class PharmaSupplyChainAgent:
@@ -26,31 +25,29 @@ class PharmaSupplyChainAgent:
 
         print("📊 Loading FAISS supplier database...")
 
-        # Load embeddings model
         embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
 
-        # Load FAISS database
         vectorstore = FAISS.load_local(
             "database/faiss_suppliers",
             embeddings,
             allow_dangerous_deserialization=True
         )
 
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+        self.retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-        print("🧠 Loading Llama3 model via Ollama...")
+        print("🧠 Loading GGUF model...")
 
-        # Load LLM
-        llm = Ollama(
-            model="llama3",
-            temperature=0.1
+        # ✅ Point this to wherever you saved the .gguf file
+        self.llm = Llama(
+            model_path="models/llama-3-8b.Q4_K_M.gguf",  # <-- change this path
+            n_ctx=4096,          # context window
+            n_gpu_layers=0,     # -1 = all layers on GPU, 0 = CPU only
+            chat_format="chatml" # Unsloth models typically use chatml
         )
 
-        # Prompt template
-        template = """
-You are a pharmaceutical supply chain expert.
+        self.prompt_template = """You are a pharmaceutical supply chain expert.
 
 Use the supplier database context below to answer the question.
 
@@ -60,30 +57,31 @@ Context:
 Question:
 {question}
 
-Give a helpful answer about pharmaceutical suppliers.
-"""
-
-        prompt = PromptTemplate(
-            template=template,
-            input_variables=["context", "question"]
-        )
-
-        # RetrievalQA chain
-        self.qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            chain_type_kwargs={"prompt": prompt}
-        )
+Give a helpful answer about pharmaceutical suppliers."""
 
         print("✅ Agent ready!\n")
 
     def ask(self, question):
-        result = self.qa_chain.run(question)
-        return result
+        # Retrieve relevant docs from FAISS
+        docs = self.retriever.invoke(question)
+        context = "\n\n".join([doc.page_content for doc in docs])
+
+        # Build the prompt
+        prompt = self.prompt_template.format(context=context, question=question)
+
+        # Run inference using chat completion (works best with finetuned/instruct models)
+        response = self.llm.create_chat_completion(
+            messages=[
+                {"role": "system", "content": "You are a pharmaceutical supply chain expert."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=512,
+            temperature=0.1,
+        )
+
+        return response["choices"][0]["message"]["content"]
 
 
-# Run agent interactively
 if __name__ == "__main__":
 
     print("🚀 Starting Pharma Supply Chain Agent\n")
@@ -98,8 +96,6 @@ if __name__ == "__main__":
             break
 
         print("\n🔎 Searching supplier database...\n")
-
         response = agent.ask(query)
-
         print("💡 Answer:\n")
         print(response)
