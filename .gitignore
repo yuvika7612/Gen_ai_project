@@ -8,3 +8,5 @@ scripts/11b_evaluate_answers.py
 database/chroma_suppliers/
 __pycache__/
 *.pyc
+scripts/*chroma*
+scripts/10_test_chromadb_search.py
