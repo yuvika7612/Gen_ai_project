@@ -12,7 +12,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # Import your agent class
-from simple_agent import PharmaSupplyChainAgent
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+from simple_agent_improved import PharmaSupplyChainAgent
 
 # Page configuration
 st.set_page_config(
@@ -210,7 +212,7 @@ with tab1:
         st.error("❌ AI Agent failed to load. Please check the error in the sidebar.")
         st.info("""
         **Common issues:**
-        - GGUF model file not found at `models/llama-3-8b.Q4_K_M.gguf`
+        - GGUF model file not found at `models/llama-3-8b_300.Q4_K_M.gguf`
         - FAISS database not loaded
         - Missing dependencies (`pip install llama-cpp-python`)
         """)

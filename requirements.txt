@@ -4,12 +4,14 @@ pandas==2.1.3
 requests==2.31.0
 
 # Vector database - FAISS (NO PostgreSQL needed!)
-faiss-cpu==1.7.4
+faiss-cpu==1.8.0
 
 # LangChain & RAG
-langchain
+chromadb
+langchain-community
+langchain-core
 langchain-huggingface
-sentence-transformers==2.2.2
+sentence-transformers>=2.3.0
 
 # LLM
 ollama==0.1.6

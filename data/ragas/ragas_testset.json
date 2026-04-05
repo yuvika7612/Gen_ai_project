@@ -1,0 +1,42 @@
+[
+  {
+    "question": "Which CDSCO-approved cold chain supplier has the shortest lead time for diabetes medications?",
+    "ground_truth": "Jordan, Sullivan and Robinson Pharma (PHARM-0072) is the CDSCO-approved cold chain supplier with the shortest lead time for diabetes medications at 3 days, located in South Paulstad, India."
+  },
+  {
+    "question": "Find CDSCO approved vaccine suppliers in India with cold chain capability.",
+    "ground_truth": "CDSCO-approved vaccine suppliers in India with cold chain capability are Clarke-Mcdonald Pharma (PHARM-0005) in Howardburgh with lead time 5 days and reliability 85.7%, and Sanford-Zimmerman Healthcare (PHARM-0008) in Port Morgan with lead time 7 days and reliability 72.6%."
+  },
+  {
+    "question": "Which supplier has the highest reliability score and is CDSCO approved?",
+    "ground_truth": "Valentine, Duffy and Williams Life Sciences (PHARM-0001) has the highest reliability score of 98.8% among CDSCO-approved suppliers, supplying Finished Antibiotics from East Sandra, India with a lead time of 4 days."
+  },
+  {
+    "question": "Compare lead times of PHARM-0005 and PHARM-0008.",
+    "ground_truth": "PHARM-0005 (Clarke-Mcdonald Pharma) has a lead time of 5 days and PHARM-0008 (Sanford-Zimmerman Healthcare) has a lead time of 7 days. PHARM-0005 is faster by 2 days."
+  },
+  {
+    "question": "Which CDSCO-approved cold chain suppliers can deliver in under 10 days?",
+    "ground_truth": "CDSCO-approved cold chain suppliers with lead time under 10 days are: Clarke-Mcdonald Pharma (PHARM-0005, 5 days, Vaccines), Sanford-Zimmerman Healthcare (PHARM-0008, 7 days, Vaccines), Brown Ray and Olson Life Sciences (PHARM-0028, 9 days, Pain Relief), Alvarado Brooks and Ward Pharma (PHARM-0036, 6 days, Generic Essential Drugs), Johnson Mclaughlin and Reese Healthcare (PHARM-0053, 4 days, Diabetes), Munoz Inc Biotech (PHARM-0054, 4 days, Respiratory), Hudson Wilson and Riley Life Sciences (PHARM-0069, 10 days, API), Jordan Sullivan and Robinson Pharma (PHARM-0072, 3 days, Diabetes), Clark and Sons Life Sciences (PHARM-0047, 14 days excluded), and Lin-Roach Life Sciences (PHARM-0096, 4 days, Cold Chain Logistics)."
+  },
+  {
+    "question": "What is the contact email for supplier PHARM-0072?",
+    "ground_truth": "PHARM-0072 is Jordan, Sullivan and Robinson Pharma located in South Paulstad, India. Their contact email is available in the supplier profile. They supply Finished Diabetes Medications at ₹216.88 per unit with a lead time of 3 days and reliability score of 75.2%."
+  },
+  {
+    "question": "Find the cheapest CDSCO-approved cold chain supplier for generic essential drugs.",
+    "ground_truth": "The cheapest CDSCO-approved cold chain supplier for generic essential drugs is Lin-Roach Life Sciences (PHARM-0096) at ₹7.25 per unit with a lead time of 4 days and reliability score of 98.3%, followed by Alvarado, Brooks and Ward Pharma (PHARM-0036) at ₹7.13 per unit with a lead time of 6 days and reliability score of 87.5%."
+  },
+  {
+    "question": "Which CDSCO-approved supplier in India has the fastest delivery for any product?",
+    "ground_truth": "Among CDSCO-approved suppliers in India, the fastest delivery is Jordan, Sullivan and Robinson Pharma (PHARM-0072) and Garcia, Williams and Turner Laboratories (PHARM-0042) both with a lead time of 3 days. PHARM-0042 supplies Oncology Drugs at ₹28614.63 and PHARM-0072 supplies Finished Diabetes Medications at ₹216.88."
+  },
+  {
+    "question": "Which CDSCO-approved cold chain supplier has the highest reliability score for pain relief medications?",
+    "ground_truth": "Brown, Ray and Olson Life Sciences (PHARM-0028) is the CDSCO-approved cold chain supplier for Pain Relief Medications with a reliability score of 92.7%, a lead time of 9 days, and a unit price of ₹19.92, located in Lynnland, India."
+  },
+  {
+    "question": "Find CDSCO-approved suppliers in India for respiratory medicines.",
+    "ground_truth": "CDSCO-approved suppliers in India for respiratory medicines are Munoz Inc Biotech (PHARM-0054) in Cowanburgh with cold chain capability, lead time 4 days, reliability 95.8%, price ₹243.47, and Stewart, Sanders and Oconnor Laboratories (PHARM-0086) in Smithtown without cold chain, lead time 6 days, reliability 74.2%, price ₹78.37."
+  }
+]

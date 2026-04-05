@@ -1,14 +1,32 @@
 """
-Simple pharmaceutical supply chain agent
-Uses Llama3 + FAISS RAG + local GGUF model
-IMPROVED VERSION with better filtering and prompt engineering
+app/simple_agent_improved.py
+MediCare Pharmaceuticals India — Advanced RAG Agent
+----------------------------------------------------
+Architecture: "LLM as ranker, not fact source"
+  - ALL supplier facts built from doc.metadata in Python
+  - LLM writes one sentence justification only
+  - LLM never touches facts
+
+FIX v4:
+  - ask() now accepts blocked_country param — passed from orchestrator
+    via tools.py → excludes suppliers from banned countries
+    e.g. "China blocks exports" → Chinese suppliers disqualified
+  - Removed unreachable dead code in _llm_recommend()
+  - DEBUG_METADATA set to False by default (set True once to inspect keys)
+
+Install deps:
+    pip install sentence-transformers rank_bm25
 """
 
 import json
 from llama_cpp import Llama
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_core.prompts import PromptTemplate
+from sentence_transformers import CrossEncoder
+from rank_bm25 import BM25Okapi
+
+# ── Set True on first run to print raw metadata keys, then set False ──────
+DEBUG_METADATA = False
 
 
 class PharmaSupplyChainAgent:
@@ -16,223 +34,344 @@ class PharmaSupplyChainAgent:
     def __init__(self):
         print("🤖 Initializing Pharma Supply Chain Agent...\n")
 
-        # Load company profile
         with open("data/company/company_profile.json") as f:
             self.company = json.load(f)
 
-        # Load inventory
         with open("data/company/current_inventory.json") as f:
             self.inventory = json.load(f)
 
         print("📊 Loading FAISS supplier database...")
-
         embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
         )
-
         vectorstore = FAISS.load_local(
             "database/faiss_suppliers",
             embeddings,
             allow_dangerous_deserialization=True
         )
+        self.retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
 
-        self.retriever = vectorstore.as_retriever(search_kwargs={"k": 5})  # ✅ Increased to 5 for better filtering
+        print("📑 Building BM25 index...")
+        self.all_docs = self.retriever.invoke("pharmaceutical supplier India")
+        corpus = [doc.page_content.split() for doc in self.all_docs]
+        self.bm25 = BM25Okapi(corpus)
+
+        print("⚖️  Loading cross-encoder re-ranker...")
+        self.reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+        # Initialise so tools.py never hits AttributeError
+        self.last_retrieved_docs = []
+        self._metadata_printed   = False
 
         print("🧠 Loading GGUF model...")
-
         self.llm = Llama(
-            model_path="models/llama-3-8b.Q4_K_M.gguf",
+            model_path="models/llama-3-8b_300.Q4_K_M.gguf",
             n_ctx=4096,
             n_gpu_layers=0,
             chat_format="chatml"
         )
 
-        # ✅ IMPROVED PROMPT with strict filtering instructions
-        self.prompt_template = """You are a pharmaceutical supply chain expert for MediCare Pharmaceuticals India.
-
-CRITICAL RULES FOR SUPPLIER RECOMMENDATIONS:
-1. CDSCO approval is MANDATORY for pharmaceutical sales in India
-2. Cold chain (2-8°C) is MANDATORY for insulin, vaccines, and biologics
-3. If a supplier does NOT meet mandatory requirements → EXCLUDE them entirely
-4. Only recommend suppliers that meet ALL criteria mentioned in the question
-5. Be specific: state CDSCO status, cold chain capability, lead time, and price
-6. If NO suppliers qualify, clearly state this instead of recommending unqualified ones
-
-Supplier Database Context:
-{context}
-
-Question:
-{question}
-
-INSTRUCTIONS:
-- Identify mandatory requirements from the question (CDSCO? Cold chain? Location?)
-- Filter suppliers: Only include those meeting ALL mandatory criteria
-- List qualified suppliers with full details
-- Clearly mark disqualified suppliers and explain why
-- Provide a final recommendation based on best match
-
-Answer format:
-1. REQUIREMENTS ANALYSIS: [List mandatory criteria]
-2. QUALIFIED SUPPLIERS: [Only those meeting ALL criteria]
-3. DISQUALIFIED SUPPLIERS: [Why they failed]
-4. RECOMMENDATION: [Best choice with justification]
-
-Answer:"""
-
         print("✅ Agent ready!\n")
 
-    def ask(self, question):
-        """
-        Ask the agent a question with intelligent filtering
-        """
+    # ──────────────────────────────────────────────────────────────────────
+    # DEBUG: print raw metadata keys from first doc — run once to inspect
+    # ──────────────────────────────────────────────────────────────────────
+    def _debug_metadata(self, doc):
+        if DEBUG_METADATA and not self._metadata_printed:
+            print("\n" + "="*50)
+            print("🔑 RAW METADATA KEYS IN FAISS (first doc):")
+            for k, v in doc.metadata.items():
+                print(f"   {k!r}: {v!r}")
+            print("="*50 + "\n")
+            self._metadata_printed = True
 
-        # Retrieve relevant docs from FAISS
-        docs = self.retriever.invoke(question)
+    # ──────────────────────────────────────────────────────────────────────
+    # HELPER: try multiple metadata key names
+    # ──────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _meta(m: dict, *keys, default="?"):
+        for k in keys:
+            v = m.get(k)
+            if v is not None and str(v).strip() not in ("", "nan", "None", "?"):
+                return v
+        return default
 
-        # ✅ PRE-FILTER suppliers based on question keywords
-        question_lower = question.lower()
+    # ──────────────────────────────────────────────────────────────────────
+    # QUERY REWRITING
+    # ──────────────────────────────────────────────────────────────────────
+    def rewrite_query(self, question: str) -> str:
+        try:
+            response = self.llm.create_chat_completion(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Output 5-8 search keywords only. "
+                            "No sentences, no bullet points, no numbers, no supplier names. "
+                            "Example: insulin CDSCO India cold-chain fast lead-time"
+                        )
+                    },
+                    {"role": "user", "content": question}
+                ],
+                max_tokens=30,
+                temperature=0.1,
+            )
+            rewritten = response["choices"][0]["message"]["content"].strip()
 
-        # Detect mandatory requirements
-        requires_cdsco = any(word in question_lower for word in ['cdsco', 'approved', 'regulatory', 'compliance'])
-        requires_cold_chain = any(word in question_lower for word in ['insulin', 'vaccine', 'cold chain', 'temperature', 'refrigerat'])
-        requires_india = 'india' in question_lower
-        requires_fast = any(word in question_lower for word in ['fast', 'urgent', 'quick', 'immediate', 'emergency'])
+            if any(c in rewritten for c in ['1.', '2.', '\n', ':', 'Lupin', 'Cipla']):
+                return question
+            if not rewritten or len(rewritten) > 120:
+                return question
 
-        print(f"\n🔍 Detected requirements:")
-        print(f"   - CDSCO approval: {requires_cdsco}")
-        print(f"   - Cold chain: {requires_cold_chain}")
-        print(f"   - India location: {requires_india}")
-        print(f"   - Fast delivery: {requires_fast}")
+            return rewritten
 
-        # Filter suppliers
-        filtered_docs = []
-        disqualified = []
+        except Exception as e:
+            print(f"  [WARN] Query rewrite failed: {e}")
+            return question
+
+    # ──────────────────────────────────────────────────────────────────────
+    # RETRIEVAL: FAISS + BM25 → merge → rerank → top 5
+    # ──────────────────────────────────────────────────────────────────────
+    def _retrieve(self, question: str) -> tuple:
+        rewritten = self.rewrite_query(question)
+        if rewritten != question:
+            print(f"  📝 Rewritten: {rewritten}")
+
+        faiss_docs   = self.retriever.invoke(rewritten)
+        bm25_scores  = self.bm25.get_scores(rewritten.split())
+        top_bm25_idx = bm25_scores.argsort()[-5:][::-1]
+        bm25_docs    = [self.all_docs[i] for i in top_bm25_idx]
+
+        seen, merged = set(), []
+        for doc in faiss_docs + bm25_docs:
+            sid = doc.metadata.get("supplier_id") or doc.page_content[:40]
+            if sid not in seen:
+                seen.add(sid)
+                merged.append(doc)
+
+        pairs    = [[question, doc.page_content] for doc in merged]
+        scores   = self.reranker.predict(pairs)
+        reranked = [doc for _, doc in sorted(zip(scores, merged), reverse=True)]
+        top5     = reranked[:5]
+
+        if top5:
+            self._debug_metadata(top5[0])
+
+        return top5, rewritten
+
+    # ──────────────────────────────────────────────────────────────────────
+    # METADATA FILTER
+    # FIX v4: accepts blocked_country to exclude suppliers from banned nations
+    # ──────────────────────────────────────────────────────────────────────
+    def _filter(self, docs: list, question_lower: str,
+                blocked_country: str = None) -> tuple:
+
+        requires_cdsco      = any(w in question_lower for w in
+                                  ['cdsco', 'approved', 'regulatory', 'compliance'])
+        requires_cold_chain = any(w in question_lower for w in
+                                  ['insulin', 'vaccine', 'cold chain', 'temperature', 'refrigerat'])
+        requires_india      = 'india' in question_lower
+        requires_fast       = any(w in question_lower for w in
+                                  ['fast', 'urgent', 'quick', 'immediate', 'emergency',
+                                   'alternative', 'block'])
+
+        # ── FIX: detect blocked country from query if not passed explicitly ──
+        if blocked_country is None:
+            blocked_countries = ['china', 'russia', 'pakistan', 'north korea']
+            for country in blocked_countries:
+                if country in question_lower and any(
+                    w in question_lower for w in
+                    ['block', 'ban', 'sanction', 'alternative', 'export', 'restrict']
+                ):
+                    blocked_country = country
+                    break
+
+        print(f"\n🔍 Requirements detected:")
+        print(f"   CDSCO={requires_cdsco} | ColdChain={requires_cold_chain} "
+              f"| India={requires_india} | Fast={requires_fast}")
+        if blocked_country:
+            print(f"   BlockedCountry={blocked_country} ← excluding these suppliers")
+
+        qualified, disqualified = [], []
 
         for doc in docs:
-            metadata = doc.metadata
+            m       = doc.metadata
             reasons = []
 
-            # Check CDSCO requirement
-            if requires_cdsco:
-                if not metadata.get('cdsco_approved', False):
-                    reasons.append("Not CDSCO approved")
+            if requires_cdsco and not m.get('cdsco_approved', False):
+                reasons.append("Not CDSCO approved")
+            if requires_cold_chain and not m.get('cold_chain', False):
+                reasons.append("No cold chain")
+            if requires_india and m.get('country', '').lower() != 'india':
+                reasons.append("Not in India")
+            if requires_fast and m.get('lead_time', 999) > 21:
+                reasons.append(f"Lead time {m.get('lead_time')} days > 21")
 
-            # Check cold chain requirement
-            if requires_cold_chain:
-                if not metadata.get('cold_chain', False):
-                    reasons.append("No cold chain capability")
+            # ── FIX: exclude suppliers from blocked country ──────────────
+            if blocked_country:
+                supplier_country = m.get('country', '').lower()
+                if blocked_country in supplier_country:
+                    reasons.append(
+                        f"Supplier in blocked country ({m.get('country', '?')}) "
+                        f"— seeking alternatives"
+                    )
 
-            # Check India location
-            if requires_india:
-                if metadata.get('country', '').lower() != 'india':
-                    reasons.append("Not in India")
-
-            # Check fast delivery (< 10 days)
-            if requires_fast:
-                if metadata.get('lead_time', 999) > 10:
-                    reasons.append(f"Lead time too long ({metadata.get('lead_time')} days)")
-
-            # If disqualified, track why
             if reasons:
-                disqualified.append({
-                    'name': metadata.get('company_name', 'Unknown'),
-                    'reasons': reasons
-                })
+                disqualified.append({'name': m.get('company_name', '?'), 'reasons': reasons})
             else:
-                # Supplier passed all filters
-                filtered_docs.append(doc)
+                qualified.append(doc)
 
-        print(f"\n📋 Filtering results:")
-        print(f"   - Initial suppliers from FAISS: {len(docs)}")
-        print(f"   - Qualified after filtering: {len(filtered_docs)}")
-        print(f"   - Disqualified: {len(disqualified)}")
+        print(f"   Qualified={len(qualified)} | Disqualified={len(disqualified)}")
+        return qualified, disqualified
 
-        # If no suppliers qualify, return clear message
-        if not filtered_docs:
-            disqualified_info = "\n".join([
-                f"   - {d['name']}: {', '.join(d['reasons'])}"
-                for d in disqualified
-            ])
+    # ──────────────────────────────────────────────────────────────────────
+    # BUILD SUPPLIER TABLE — all facts from Python metadata
+    # ──────────────────────────────────────────────────────────────────────
+    def _build_supplier_table(self, docs: list) -> tuple:
+        lines    = []
+        llm_list = []
 
-            return f"""❌ NO QUALIFIED SUPPLIERS FOUND
+        for i, doc in enumerate(docs, 1):
+            m = doc.metadata
 
-REQUIREMENTS:
-{'✅ CDSCO approved' if requires_cdsco else ''}
-{'✅ Cold chain capability (2-8°C)' if requires_cold_chain else ''}
-{'✅ Located in India' if requires_india else ''}
-{'✅ Fast delivery (<10 days)' if requires_fast else ''}
+            name    = self._meta(m, 'company_name', default='Unknown')
+            sid     = self._meta(m, 'supplier_id',  default='?')
+            country = self._meta(m, 'country',       default='Unknown')
 
-DISQUALIFIED SUPPLIERS:
-{disqualified_info}
+            city = self._meta(
+                m, 'city', 'location', 'headquarters', 'region',
+                'state', 'district', 'address',
+                default='Unknown'
+            )
 
-RECOMMENDATION:
-Please adjust your requirements or contact suppliers to verify if they can meet certification needs."""
+            price = self._meta(m, 'price', 'unit_price_inr', 'unit_price',
+                               'price_inr', default=0)
+            lead  = self._meta(m, 'lead_time', 'lead_time_days',
+                               'delivery_days', 'lead_days', default='?')
 
-        # Build context from FILTERED suppliers only
-        context_parts = []
-        for i, doc in enumerate(filtered_docs, 1):
-            meta = doc.metadata
-            context_parts.append(f"""
-QUALIFIED SUPPLIER {i}:
-Company: {meta.get('company_name', 'Unknown')}
-✅ CDSCO Approved: {meta.get('cdsco_approved', False)}
-✅ Cold Chain: {meta.get('cold_chain', False)}
-✅ Country: {meta.get('country', 'Unknown')}
-Price: ₹{meta.get('price', 0):.2f}
-Lead Time: {meta.get('lead_time', 0)} days
-Reliability: {meta.get('reliability', 0)}%
-Emergency Supply: {meta.get('emergency_supply', False)}
+            reliability = self._meta(
+                m, 'reliability_score', 'reliability',
+                'on_time_delivery', 'delivery_reliability',
+                'supplier_reliability', 'score',
+                default='?'
+            )
 
-Full Details:
-{doc.page_content}
-""")
+            cdsco     = '✅' if m.get('cdsco_approved', False) else '❌'
+            cold      = '✅' if m.get('cold_chain', False) else '❌'
+            category  = self._meta(m, 'product_category', 'category',
+                                   'product_type', default='Unknown')
+            emergency = '✅' if m.get('emergency_supply_available', False) else '❌'
 
-        context = "\n".join(context_parts)
+            try:
+                price_str = f"₹{float(price):.2f}"
+            except (ValueError, TypeError):
+                price_str = f"₹{price}"
 
-        # Add disqualified suppliers to context for transparency
-        if disqualified:
-            disqualified_context = "\n\nDISQUALIFIED SUPPLIERS (DO NOT RECOMMEND):\n"
-            for d in disqualified:
-                disqualified_context += f"- {d['name']}: {', '.join(d['reasons'])}\n"
-            context += disqualified_context
+            block = (
+                f"SUPPLIER {i}: {name} ({sid})\n"
+                f"  Category    : {category}\n"
+                f"  Location    : {city}, {country}\n"
+                f"  Price       : {price_str}/unit\n"
+                f"  Lead Time   : {lead} days\n"
+                f"  Reliability : {reliability}%\n"
+                f"  CDSCO       : {cdsco}\n"
+                f"  Cold Chain  : {cold}\n"
+                f"  Emergency   : {emergency}"
+            )
+            lines.append(block)
 
-        # Build the prompt
-        prompt = self.prompt_template.format(context=context, question=question)
+            llm_list.append(
+                f"Supplier {i} ({sid}): lead={lead}d, "
+                f"reliability={reliability}%, price=₹{price}"
+            )
 
-        # Run inference
-        response = self.llm.create_chat_completion(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a pharmaceutical supply chain expert. Follow the filtering rules strictly. Only recommend qualified suppliers."
-                },
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=800,  # ✅ Increased for detailed responses
-            temperature=0.1,  # Low temperature for factual responses
-            top_p=0.9,
-            repeat_penalty=1.1  # ✅ Reduce repetition
+        return "\n\n".join(lines), llm_list
+
+    # ──────────────────────────────────────────────────────────────────────
+    # RECOMMENDATION — pure Python, no LLM, no hallucination risk
+    # Dead code removed from v3
+    # ──────────────────────────────────────────────────────────────────────
+    def _llm_recommend(self, question: str, llm_list: list) -> str:
+        if not llm_list:
+            return "No qualified suppliers found."
+
+        top = llm_list[0]
+
+        if len(llm_list) == 1:
+            return (
+                f"RECOMMEND {top.split(':')[0]} — only qualified supplier. "
+                f"Verify availability before ordering."
+            )
+
+        second = llm_list[1]
+        return (
+            f"RECOMMEND {top.split(':')[0]} — fastest lead time. "
+            f"Alternative: {second.split(':')[0]} if Supplier 1 is unavailable."
         )
 
-        return response["choices"][0]["message"]["content"]
+    # ──────────────────────────────────────────────────────────────────────
+    # MAIN ask() METHOD
+    # FIX v4: accepts blocked_country — passed from tools.py → _filter()
+    # ──────────────────────────────────────────────────────────────────────
+    def ask(self, question: str, blocked_country: str = None) -> str:
+
+        docs, rewritten = self._retrieve(question)
+        qualified, disqualified = self._filter(
+            docs, question.lower(), blocked_country=blocked_country
+        )
+
+        # Set last_retrieved_docs to qualified only — tools.py reads this
+        self.last_retrieved_docs = qualified
+
+        if not qualified:
+            disq_lines = "\n".join(
+                f"  - {d['name']}: {', '.join(d['reasons'])}"
+                for d in disqualified
+            )
+            return (
+                "❌ NO QUALIFIED SUPPLIERS FOUND\n\n"
+                "DISQUALIFIED:\n" + disq_lines +
+                "\n\nTry relaxing requirements (e.g. remove 'fast' or 'India')."
+            )
+
+        # Sort fastest first
+        qualified.sort(
+            key=lambda d: d.metadata.get(
+                'lead_time_days', d.metadata.get('lead_time', 999)
+            )
+        )
+
+        supplier_table, llm_list = self._build_supplier_table(qualified)
+        recommendation = self._llm_recommend(question, llm_list)
+
+        disq_section = ""
+        if disqualified:
+            disq_section = "\n\nDISQUALIFIED SUPPLIERS:\n" + "\n".join(
+                f"  ❌ {d['name']}: {', '.join(d['reasons'])}"
+                for d in disqualified
+            )
+
+        return (
+            f"QUALIFIED SUPPLIERS ({len(qualified)} found):\n\n"
+            f"{supplier_table}"
+            f"{disq_section}\n\n"
+            f"{'─'*50}\n"
+            f"RECOMMENDATION:\n{recommendation}"
+        )
 
 
 if __name__ == "__main__":
 
     print("🚀 Starting Pharma Supply Chain Agent\n")
-
     agent = PharmaSupplyChainAgent()
 
-    # ✅ Test with sample questions
     test_questions = [
         "Find CDSCO approved insulin manufacturers in India with fast delivery.",
         "Find vaccine suppliers with cold chain capability.",
         "Find low-cost generic drug manufacturers.",
+        "China blocks API exports for antibiotics. Find alternative suppliers urgently.",
+        "I need insulin stuff urgently",
     ]
-
-    print("\n" + "="*60)
-    print("🧪 TESTING WITH SAMPLE QUESTIONS")
-    print("="*60)
 
     use_test = input("\nRun test questions? (y/n): ").lower() == 'y'
 
@@ -241,23 +380,13 @@ if __name__ == "__main__":
             print(f"\n{'='*60}")
             print(f"TEST {i}: {question}")
             print(f"{'='*60}\n")
-
-            response = agent.ask(question)
-            print("💡 Answer:\n")
-            print(response)
-            print("\n" + "="*60)
-
+            print(agent.ask(question))
             input("\nPress Enter for next test...")
     else:
-        # Interactive mode
         while True:
             query = input("\nAsk a supplier question (type 'exit' to quit): ")
-
             if query.lower() == "exit":
                 print("👋 Goodbye!")
                 break
-
-            print("\n🔎 Searching supplier database...\n")
-            response = agent.ask(query)
-            print("💡 Answer:\n")
-            print(response)
+            print("\n🔎 Searching...\n")
+            print(agent.ask(query))

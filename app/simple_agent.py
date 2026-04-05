@@ -41,7 +41,7 @@ class PharmaSupplyChainAgent:
 
         # ✅ Point this to wherever you saved the .gguf file
         self.llm = Llama(
-            model_path="models/llama-3-8b.Q4_K_M.gguf",  # <-- change this path
+            model_path="models/llama-3-8b_300.Q4_K_M.gguf",  # <-- change this path
             n_ctx=4096,          # context window
             n_gpu_layers=0,     # -1 = all layers on GPU, 0 = CPU only
             chat_format="chatml" # Unsloth models typically use chatml
