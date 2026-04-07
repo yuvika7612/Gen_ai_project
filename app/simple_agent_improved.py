@@ -19,6 +19,8 @@ Install deps:
 """
 
 import json
+from pathlib import Path
+import pandas as pd
 from llama_cpp import Llama
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -40,6 +42,17 @@ class PharmaSupplyChainAgent:
         with open("data/company/current_inventory.json") as f:
             self.inventory = json.load(f)
 
+        # Load CSV for fields not stored in FAISS metadata (city, reliability_score)
+        csv_path = Path("data/suppliers/pharma_suppliers.csv")
+        if csv_path.exists():
+            df = pd.read_csv(csv_path)
+            self._supplier_lookup = {
+                row['supplier_id']: row.to_dict()
+                for _, row in df.iterrows()
+            }
+        else:
+            self._supplier_lookup = {}
+
         print("📊 Loading FAISS supplier database...")
         embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -51,8 +64,22 @@ class PharmaSupplyChainAgent:
         )
         self.retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
 
-        print("📑 Building BM25 index...")
-        self.all_docs = self.retriever.invoke("pharmaceutical supplier India")
+        print("📑 Building BM25 index over ALL suppliers...")
+        # Use the vectorstore directly to get all docs (not limited to k=10)
+        self.all_docs = vectorstore.docstore._dict.values() if hasattr(vectorstore.docstore, '_dict') else []
+        self.all_docs = list(self.all_docs)
+        if not self.all_docs:
+            # Fallback: retrieve a large set across diverse queries
+            seen_ids, all_docs = set(), []
+            for seed in ["antibiotic", "insulin", "vaccine", "generic", "cardiac",
+                         "respiratory", "oncology", "cold chain", "India", "API"]:
+                for doc in vectorstore.similarity_search(seed, k=15):
+                    sid = doc.metadata.get("supplier_id", doc.page_content[:40])
+                    if sid not in seen_ids:
+                        seen_ids.add(sid)
+                        all_docs.append(doc)
+            self.all_docs = all_docs
+        print(f"   BM25 indexed {len(self.all_docs)} suppliers")
         corpus = [doc.page_content.split() for doc in self.all_docs]
         self.bm25 = BM25Okapi(corpus)
 
@@ -132,13 +159,19 @@ class PharmaSupplyChainAgent:
     # ──────────────────────────────────────────────────────────────────────
     # RETRIEVAL: FAISS + BM25 → merge → rerank → top 5
     # ──────────────────────────────────────────────────────────────────────
-    def _retrieve(self, question: str) -> tuple:
+    def _retrieve(self, question: str, blocked_country: str = None) -> tuple:
         rewritten = self.rewrite_query(question)
         if rewritten != question:
             print(f"  📝 Rewritten: {rewritten}")
 
-        faiss_docs   = self.retriever.invoke(rewritten)
-        bm25_scores  = self.bm25.get_scores(rewritten.split())
+        # When a country is blocked, bias retrieval toward India/other alternatives
+        retrieval_query = rewritten
+        if blocked_country:
+            retrieval_query = rewritten + " India alternative supplier"
+            print(f"  🔄 Retrieval biased away from {blocked_country}: {retrieval_query}")
+
+        faiss_docs   = self.retriever.invoke(retrieval_query)
+        bm25_scores  = self.bm25.get_scores(retrieval_query.split())
         top_bm25_idx = bm25_scores.argsort()[-5:][::-1]
         bm25_docs    = [self.all_docs[i] for i in top_bm25_idx]
 
@@ -149,7 +182,24 @@ class PharmaSupplyChainAgent:
                 seen.add(sid)
                 merged.append(doc)
 
-        pairs    = [[question, doc.page_content] for doc in merged]
+        # Pre-filter blocked country BEFORE re-ranking so the cross-encoder
+        # cannot score them back into the top-5 (it sees "China" in the query
+        # and may rank Chinese suppliers highest even when we want alternatives)
+        if blocked_country:
+            before = len(merged)
+            merged = [
+                doc for doc in merged
+                if blocked_country not in doc.metadata.get('country', '').lower()
+            ]
+            print(f"  🚫 Pre-filter removed {before - len(merged)} {blocked_country} "
+                  f"suppliers; {len(merged)} remain for re-ranking")
+
+        if not merged:
+            return [], rewritten
+
+        # Use retrieval_query (not original question) for cross-encoder so
+        # country-name in the query doesn't bias scores toward blocked country
+        pairs    = [[retrieval_query, doc.page_content] for doc in merged]
         scores   = self.reranker.predict(pairs)
         reranked = [doc for _, doc in sorted(zip(scores, merged), reverse=True)]
         top5     = reranked[:5]
@@ -172,8 +222,7 @@ class PharmaSupplyChainAgent:
                                   ['insulin', 'vaccine', 'cold chain', 'temperature', 'refrigerat'])
         requires_india      = 'india' in question_lower
         requires_fast       = any(w in question_lower for w in
-                                  ['fast', 'urgent', 'quick', 'immediate', 'emergency',
-                                   'alternative', 'block'])
+                                  ['fast', 'urgent', 'quick', 'immediate', 'emergency'])
 
         # ── FIX: detect blocked country from query if not passed explicitly ──
         if blocked_country is None:
@@ -238,11 +287,14 @@ class PharmaSupplyChainAgent:
             sid     = self._meta(m, 'supplier_id',  default='?')
             country = self._meta(m, 'country',       default='Unknown')
 
+            # Enrich from CSV for fields not stored in FAISS metadata
+            csv_row = self._supplier_lookup.get(sid, {})
+
             city = self._meta(
                 m, 'city', 'location', 'headquarters', 'region',
                 'state', 'district', 'address',
-                default='Unknown'
-            )
+                default=None
+            ) or str(csv_row.get('city', 'Unknown'))
 
             price = self._meta(m, 'price', 'unit_price_inr', 'unit_price',
                                'price_inr', default=0)
@@ -253,39 +305,71 @@ class PharmaSupplyChainAgent:
                 m, 'reliability_score', 'reliability',
                 'on_time_delivery', 'delivery_reliability',
                 'supplier_reliability', 'score',
-                default='?'
+                default=None
             )
+            if reliability is None:
+                reliability = csv_row.get('reliability_score', '?')
 
             cdsco     = '✅' if m.get('cdsco_approved', False) else '❌'
             cold      = '✅' if m.get('cold_chain', False) else '❌'
             category  = self._meta(m, 'product_category', 'category',
                                    'product_type', default='Unknown')
-            emergency = '✅' if m.get('emergency_supply_available', False) else '❌'
 
             try:
                 price_str = f"₹{float(price):.2f}"
             except (ValueError, TypeError):
                 price_str = f"₹{price}"
 
+            rank_label = ["🥇 BEST MATCH", "🥈 GOOD ALTERNATIVE", "🥉 BACKUP OPTION"]
+            rank_str   = rank_label[i - 1] if i <= 3 else f"Option {i}"
+
+            compliance_tags = []
+            if cdsco == '✅':
+                compliance_tags.append("CDSCO Approved")
+            if cold == '✅':
+                compliance_tags.append("Cold Chain Ready")
+            compliance_str = " | ".join(compliance_tags) if compliance_tags else "Check compliance"
+
+            try:
+                rel_float = float(reliability)
+                rel_bar   = "█" * int(rel_float / 10) + "░" * (10 - int(rel_float / 10))
+                rel_str   = f"{rel_float:.1f}%  [{rel_bar}]"
+            except (ValueError, TypeError):
+                rel_str = "N/A"
+
+            # Inline warnings for important compliance gaps
+            warnings = []
+            if cdsco == '❌':
+                warnings.append("⚠️ Not CDSCO approved — verify regulatory status before ordering in India")
+            high_risk = ['china', 'russia', 'pakistan', 'north korea']
+            if any(c in country.lower() for c in high_risk):
+                warnings.append(f"⚠️ {country}-based — consider geopolitical supply risk")
+            warning_lines = ("\n\n" + "\n\n".join(warnings)) if warnings else ""
+
+            # Use markdown formatting so Streamlit renders each field on its own line.
+            # \n\n = paragraph break in markdown (single \n is collapsed).
             block = (
-                f"SUPPLIER {i}: {name} ({sid})\n"
-                f"  Category    : {category}\n"
-                f"  Location    : {city}, {country}\n"
-                f"  Price       : {price_str}/unit\n"
-                f"  Lead Time   : {lead} days\n"
-                f"  Reliability : {reliability}%\n"
-                f"  CDSCO       : {cdsco}\n"
-                f"  Cold Chain  : {cold}\n"
-                f"  Emergency   : {emergency}"
+                f"\n\n---\n\n"
+                f"**{rank_str} — {name}**\n\n"
+                f"**ID:** {sid} &nbsp;|&nbsp; **Product:** {category}\n\n"
+                f"**Location:** {city}, {country}\n\n"
+                f"**Price:** {price_str} per unit &nbsp;|&nbsp; "
+                f"**Delivery:** {lead} days &nbsp;|&nbsp; "
+                f"**Reliability:** {rel_str}\n\n"
+                f"**Badges:** {compliance_str}"
+                f"{warning_lines}"
             )
             lines.append(block)
 
-            llm_list.append(
-                f"Supplier {i} ({sid}): lead={lead}d, "
-                f"reliability={reliability}%, price=₹{price}"
-            )
+            llm_list.append({
+                "rank": i, "sid": sid, "name": name,
+                "lead": lead, "reliability": reliability,
+                "price": price, "country": country,
+                "cdsco": cdsco == '✅', "cold": cold == '✅',
+                "category": category,
+            })
 
-        return "\n\n".join(lines), llm_list
+        return "\n".join(lines), llm_list
 
     # ──────────────────────────────────────────────────────────────────────
     # RECOMMENDATION — pure Python, no LLM, no hallucination risk
@@ -296,26 +380,110 @@ class PharmaSupplyChainAgent:
             return "No qualified suppliers found."
 
         top = llm_list[0]
+        q   = question.lower()
 
-        if len(llm_list) == 1:
-            return (
-                f"RECOMMEND {top.split(':')[0]} — only qualified supplier. "
-                f"Verify availability before ordering."
+        # Detect scenario for contextual advice
+        is_emergency  = any(w in q for w in ['urgent', 'emergency', 'power failure',
+                                              'threat', 'block', 'ban'])
+        is_cold_chain = any(w in q for w in ['cold chain', 'vaccine', 'insulin',
+                                              'temperature', 'refrigerat'])
+        is_geopolitical = any(w in q for w in ['block', 'ban', 'sanction', 'export'])
+
+        try:
+            lead_days = int(top['lead'])
+            price_str = f"₹{float(top['price']):.2f}"
+        except (ValueError, TypeError):
+            lead_days = top['lead']
+            price_str = f"₹{top['price']}"
+
+        badges = []
+        if top['cdsco']:  badges.append("CDSCO approved")
+        if top['cold']:   badges.append("cold chain capable")
+        badge_str = " and ".join(badges) if badges else "check compliance before ordering"
+
+        lines = []
+
+        # Primary recommendation
+        lines.append(
+            f"Contact {top['name']} ({top['sid']}) first. "
+            f"They can deliver in {lead_days} days at {price_str}/unit "
+            f"and are {badge_str}."
+        )
+
+        if is_emergency:
+            lines.append(
+                "Given the urgency, confirm stock availability and request "
+                "an expedited shipment confirmation before raising a purchase order."
             )
 
-        second = llm_list[1]
-        return (
-            f"RECOMMEND {top.split(':')[0]} — fastest lead time. "
-            f"Alternative: {second.split(':')[0]} if Supplier 1 is unavailable."
+        if is_cold_chain:
+            lines.append(
+                "Verify cold chain continuity documents (temperature logs, "
+                "GDP certification) with the supplier before dispatch."
+            )
+
+        if is_geopolitical:
+            lines.append(
+                "This supplier is outside the affected region, reducing "
+                "geopolitical supply risk."
+            )
+
+        # Fallback option
+        if len(llm_list) >= 2:
+            alt = llm_list[1]
+            try:
+                alt_lead = int(alt['lead'])
+                alt_price = f"₹{float(alt['price']):.2f}"
+            except (ValueError, TypeError):
+                alt_lead  = alt['lead']
+                alt_price = f"₹{alt['price']}"
+
+            # Warn if fallback supplier is from a geopolitically sensitive country
+            high_risk_countries = ['china', 'russia', 'pakistan', 'north korea']
+            alt_country_lower   = alt['country'].lower()
+            risk_note = ""
+            if any(c in alt_country_lower for c in high_risk_countries):
+                risk_note = (
+                    f" Note: {alt['country']}-based suppliers carry higher "
+                    f"geopolitical supply risk — use only if no other option is available."
+                )
+
+            lines.append(
+                f"If {top['name']} cannot fulfil the order, escalate to "
+                f"{alt['name']} ({alt['sid']}) — {alt_lead}-day lead time "
+                f"at {alt_price}/unit.{risk_note}"
+            )
+
+        lines.append(
+            "All draft purchase orders require sign-off from a procurement "
+            "officer before submission."
         )
+
+        return "  ".join(lines)
 
     # ──────────────────────────────────────────────────────────────────────
     # MAIN ask() METHOD
-    # FIX v4: accepts blocked_country — passed from tools.py → _filter()
+    # FIX v5: detect blocked_country BEFORE retrieval so _retrieve() can
+    # bias the query away from that country (e.g. Streamlit calls ask()
+    # directly without passing blocked_country)
     # ──────────────────────────────────────────────────────────────────────
     def ask(self, question: str, blocked_country: str = None) -> str:
 
-        docs, rewritten = self._retrieve(question)
+        # Detect blocked country early so retrieval can be biased
+        if blocked_country is None:
+            q_lower = question.lower()
+            _blocked_map = {
+                'china': ['block', 'ban', 'sanction', 'alternative', 'export', 'restrict'],
+                'russia': ['block', 'ban', 'sanction', 'alternative', 'export', 'restrict'],
+                'pakistan': ['block', 'ban', 'sanction', 'alternative', 'export', 'restrict'],
+                'north korea': ['block', 'ban', 'sanction', 'alternative', 'export', 'restrict'],
+            }
+            for country, triggers in _blocked_map.items():
+                if country in q_lower and any(w in q_lower for w in triggers):
+                    blocked_country = country
+                    break
+
+        docs, rewritten = self._retrieve(question, blocked_country=blocked_country)
         qualified, disqualified = self._filter(
             docs, question.lower(), blocked_country=blocked_country
         )
@@ -323,40 +491,76 @@ class PharmaSupplyChainAgent:
         # Set last_retrieved_docs to qualified only — tools.py reads this
         self.last_retrieved_docs = qualified
 
+        # Build scenario header
+        q = question.lower()
+        is_geo       = any(w in q for w in ['block', 'ban', 'sanction', 'export'])
+        is_emergency = any(w in q for w in ['power failure', 'emergency', 'threat',
+                                             'urgent', 'urgently'])
+        is_cold      = any(w in q for w in ['cold chain', 'vaccine', 'insulin',
+                                             'temperature', 'refrigerat'])
+        is_compliance = any(w in q for w in ['cdsco', 'compliance', 'regulatory',
+                                              'approved', 'fast delivery', 'fast'])
+
+        if is_geo:
+            scenario = "🚨 GEOPOLITICAL DISRUPTION — Alternative Supplier Search"
+        elif is_emergency and is_cold:
+            scenario = "⚡❄️ EMERGENCY COLD CHAIN — Urgent Temperature-Sensitive Supply"
+        elif is_emergency:
+            scenario = "⚡ EMERGENCY RESPONSE — Urgent Supplier Needed"
+        elif is_cold and is_compliance:
+            scenario = "❄️ COLD CHAIN + COMPLIANCE — Regulated Temperature-Sensitive Supply"
+        elif is_cold:
+            scenario = "❄️ COLD CHAIN CRITICAL — Temperature-Sensitive Supply"
+        elif is_compliance:
+            scenario = "📋 COMPLIANCE SEARCH — Regulatory Requirements"
+        else:
+            scenario = "🔍 SUPPLIER SEARCH RESULTS"
+
         if not qualified:
             disq_lines = "\n".join(
-                f"  - {d['name']}: {', '.join(d['reasons'])}"
+                f"- **{d['name']}**: {', '.join(d['reasons'])}"
                 for d in disqualified
             )
             return (
-                "❌ NO QUALIFIED SUPPLIERS FOUND\n\n"
-                "DISQUALIFIED:\n" + disq_lines +
-                "\n\nTry relaxing requirements (e.g. remove 'fast' or 'India')."
+                f"## {scenario}\n\n"
+                "No suppliers matched all your requirements. "
+                "Here is what was found and why each was excluded:\n\n"
+                + disq_lines +
+                "\n\n> **Suggestion:** Try broadening the search — for example, "
+                "remove the urgency constraint or expand to other regions."
             )
 
-        # Sort fastest first
-        qualified.sort(
-            key=lambda d: d.metadata.get(
-                'lead_time_days', d.metadata.get('lead_time', 999)
+        # Sort by price for cost queries, otherwise by lead time
+        price_query = any(w in q for w in ['low-cost', 'low cost', 'cheap', 'affordable',
+                                            'cost', 'price', 'inexpensive', 'budget'])
+        if price_query:
+            qualified.sort(
+                key=lambda d: float(d.metadata.get('price', 9999))
             )
-        )
+        else:
+            qualified.sort(
+                key=lambda d: d.metadata.get('lead_time', 999)
+            )
 
         supplier_table, llm_list = self._build_supplier_table(qualified)
         recommendation = self._llm_recommend(question, llm_list)
 
         disq_section = ""
         if disqualified:
-            disq_section = "\n\nDISQUALIFIED SUPPLIERS:\n" + "\n".join(
-                f"  ❌ {d['name']}: {', '.join(d['reasons'])}"
+            disq_names = "\n".join(
+                f"- {d['name']}: {', '.join(d['reasons'])}"
                 for d in disqualified
             )
+            disq_section = f"\n\n**Also considered but excluded:**\n\n{disq_names}"
 
         return (
-            f"QUALIFIED SUPPLIERS ({len(qualified)} found):\n\n"
+            f"## {scenario}\n\n"
+            f"Found **{len(qualified)} supplier{'s' if len(qualified) != 1 else ''}** "
+            f"that meet your requirements:"
             f"{supplier_table}"
             f"{disq_section}\n\n"
-            f"{'─'*50}\n"
-            f"RECOMMENDATION:\n{recommendation}"
+            f"---\n\n"
+            f"### What to do next\n\n{recommendation}"
         )
 
 
