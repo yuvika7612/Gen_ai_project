@@ -7,7 +7,6 @@ requests==2.31.0
 faiss-cpu==1.8.0
 
 # LangChain & RAG
-chromadb
 langchain-community
 langchain-core
 langchain-huggingface
@@ -15,6 +14,10 @@ sentence-transformers>=2.3.0
 
 # LLM
 ollama==0.1.6
+llama-cpp-python
+
+# BM25 Retrieval
+rank_bm25
 
 # Streamlit (Week 2)
 streamlit==1.29.0
