@@ -95,7 +95,8 @@ class PharmaSupplyChainAgent:
             model_path="models/llama-3-8b_300.Q4_K_M.gguf",
             n_ctx=4096,
             n_gpu_layers=0,
-            chat_format="chatml"
+            chat_format="chatml",
+            verbose=False       # suppress llama_kv_cache / layer logs
         )
 
         print("✅ Agent ready!\n")
@@ -213,6 +214,23 @@ class PharmaSupplyChainAgent:
     # METADATA FILTER
     # FIX v4: accepts blocked_country to exclude suppliers from banned nations
     # ──────────────────────────────────────────────────────────────────────
+    # Maps query keywords → accepted product_category substrings (lowercase)
+    _CATEGORY_MAP = {
+        'insulin'    : ['diabetes', 'insulin'],
+        'diabetes'   : ['diabetes', 'insulin'],
+        'antibiotic' : ['antibiotic', 'api', 'active pharmaceutical'],
+        'antibiotics': ['antibiotic', 'api', 'active pharmaceutical'],
+        'vaccine'    : ['vaccine'],
+        'vaccines'   : ['vaccine'],
+        'covid'      : ['vaccine'],
+        'cardiac'    : ['cardiac'],
+        'oncology'   : ['oncology'],
+        'cancer'     : ['oncology'],
+        'respiratory': ['respiratory'],
+        'pain'       : ['pain relief'],
+        'generic'    : ['generic'],
+    }
+
     def _filter(self, docs: list, question_lower: str,
                 blocked_country: str = None) -> tuple:
 
@@ -223,6 +241,13 @@ class PharmaSupplyChainAgent:
         requires_india      = 'india' in question_lower
         requires_fast       = any(w in question_lower for w in
                                   ['fast', 'urgent', 'quick', 'immediate', 'emergency'])
+
+        # Detect required product categories from query keywords
+        required_categories = []
+        for keyword, cats in self._CATEGORY_MAP.items():
+            if keyword in question_lower:
+                required_categories.extend(cats)
+        required_categories = list(set(required_categories))
 
         # ── FIX: detect blocked country from query if not passed explicitly ──
         if blocked_country is None:
@@ -238,6 +263,8 @@ class PharmaSupplyChainAgent:
         print(f"\n🔍 Requirements detected:")
         print(f"   CDSCO={requires_cdsco} | ColdChain={requires_cold_chain} "
               f"| India={requires_india} | Fast={requires_fast}")
+        if required_categories:
+            print(f"   Categories={required_categories}")
         if blocked_country:
             print(f"   BlockedCountry={blocked_country} ← excluding these suppliers")
 
@@ -255,6 +282,15 @@ class PharmaSupplyChainAgent:
                 reasons.append("Not in India")
             if requires_fast and m.get('lead_time', 999) > 21:
                 reasons.append(f"Lead time {m.get('lead_time')} days > 21")
+
+            # Category match — only reject if query clearly targets a specific product
+            if required_categories:
+                supplier_cat = m.get('product_category', '').lower()
+                if not any(cat in supplier_cat for cat in required_categories):
+                    reasons.append(
+                        f"Product mismatch ({m.get('product_category', '?')} "
+                        f"vs requested: {', '.join(required_categories)})"
+                    )
 
             # ── FIX: exclude suppliers from blocked country ──────────────
             if blocked_country:
@@ -310,6 +346,14 @@ class PharmaSupplyChainAgent:
             if reliability is None:
                 reliability = csv_row.get('reliability_score', '?')
 
+            # Extra fields from CSV
+            stock          = csv_row.get('current_stock', '?')
+            unit           = csv_row.get('unit', 'units')
+            min_order      = csv_row.get('minimum_order_quantity', '?')
+            email          = csv_row.get('contact_email', '')
+            phone          = csv_row.get('phone', '')
+            business_hours = csv_row.get('business_hours', '')
+
             cdsco     = '✅' if m.get('cdsco_approved', False) else '❌'
             cold      = '✅' if m.get('cold_chain', False) else '❌'
             category  = self._meta(m, 'product_category', 'category',
@@ -319,6 +363,18 @@ class PharmaSupplyChainAgent:
                 price_str = f"₹{float(price):.2f}"
             except (ValueError, TypeError):
                 price_str = f"₹{price}"
+
+            # Format stock level with urgency hint
+            try:
+                stock_int = int(stock)
+                if stock_int == 0:
+                    stock_str = "⚠️ Out of stock"
+                elif stock_int < 500:
+                    stock_str = f"⚠️ Low — {stock_int:,} {unit}"
+                else:
+                    stock_str = f"✅ {stock_int:,} {unit}"
+            except (ValueError, TypeError):
+                stock_str = "Unknown"
 
             rank_label = ["🥇 BEST MATCH", "🥈 GOOD ALTERNATIVE", "🥉 BACKUP OPTION"]
             rank_str   = rank_label[i - 1] if i <= 3 else f"Option {i}"
@@ -332,7 +388,9 @@ class PharmaSupplyChainAgent:
 
             try:
                 rel_float = float(reliability)
-                rel_bar   = "█" * int(rel_float / 10) + "░" * (10 - int(rel_float / 10))
+                # Use round() so 98.8% shows as 10/10 not 9/10
+                filled    = min(round(rel_float / 10), 10)
+                rel_bar   = "█" * filled + "░" * (10 - filled)
                 rel_str   = f"{rel_float:.1f}%  [{rel_bar}]"
             except (ValueError, TypeError):
                 rel_str = "N/A"
@@ -348,13 +406,22 @@ class PharmaSupplyChainAgent:
 
             # Use markdown formatting so Streamlit renders each field on its own line.
             # \n\n = paragraph break in markdown (single \n is collapsed).
+            contact_parts = []
+            if phone:  contact_parts.append(f"📞 {phone}")
+            if email:  contact_parts.append(f"✉️ {email}")
+            if business_hours: contact_parts.append(f"🕐 {business_hours}")
+            contact_str = " &nbsp;|&nbsp; ".join(contact_parts)
+
             block = (
                 f"\n\n---\n\n"
                 f"**{rank_str} — {name}**\n\n"
                 f"**ID:** {sid} &nbsp;|&nbsp; **Product:** {category}\n\n"
                 f"**Location:** {city}, {country}\n\n"
-                f"**Price:** {price_str} per unit &nbsp;|&nbsp; "
-                f"**Delivery:** {lead} days &nbsp;|&nbsp; "
+                + (f"**Contact:** {contact_str}\n\n" if contact_str else "")
+                + f"**Price:** {price_str}/unit &nbsp;|&nbsp; "
+                f"**Min. Order:** {min_order} {unit} &nbsp;|&nbsp; "
+                f"**Delivery:** {lead} days\n\n"
+                f"**Stock:** {stock_str} &nbsp;|&nbsp; "
                 f"**Reliability:** {rel_str}\n\n"
                 f"**Badges:** {compliance_str}"
                 f"{warning_lines}"
@@ -366,7 +433,8 @@ class PharmaSupplyChainAgent:
                 "lead": lead, "reliability": reliability,
                 "price": price, "country": country,
                 "cdsco": cdsco == '✅', "cold": cold == '✅',
-                "category": category,
+                "category": category, "email": email,
+                "stock": stock_str,
             })
 
         return "\n".join(lines), llm_list
@@ -383,11 +451,14 @@ class PharmaSupplyChainAgent:
         q   = question.lower()
 
         # Detect scenario for contextual advice
-        is_emergency  = any(w in q for w in ['urgent', 'emergency', 'power failure',
-                                              'threat', 'block', 'ban'])
-        is_cold_chain = any(w in q for w in ['cold chain', 'vaccine', 'insulin',
-                                              'temperature', 'refrigerat'])
+        is_emergency    = any(w in q for w in ['urgent', 'emergency', 'power failure',
+                                               'threat', 'block', 'ban'])
+        is_cold_chain   = any(w in q for w in ['cold chain', 'vaccine', 'insulin',
+                                               'temperature', 'refrigerat'])
         is_geopolitical = any(w in q for w in ['block', 'ban', 'sanction', 'export'])
+        is_price_query  = any(w in q for w in ['low-cost', 'low cost', 'cheap',
+                                               'affordable', 'cost', 'price',
+                                               'inexpensive', 'budget'])
 
         try:
             lead_days = int(top['lead'])
@@ -401,14 +472,23 @@ class PharmaSupplyChainAgent:
         if top['cold']:   badges.append("cold chain capable")
         badge_str = " and ".join(badges) if badges else "check compliance before ordering"
 
+        email     = top.get('email', '')
+        email_str = f" Reach them at **{email}**." if email else ""
+
         lines = []
 
-        # Primary recommendation
-        lines.append(
-            f"Contact {top['name']} ({top['sid']}) first. "
-            f"They can deliver in {lead_days} days at {price_str}/unit "
-            f"and are {badge_str}."
-        )
+        # Primary recommendation — mention price advantage for cost queries
+        if is_price_query:
+            lines.append(
+                f"Contact {top['name']} ({top['sid']}) first — most affordable option "
+                f"at {price_str}/unit with {lead_days}-day delivery.{email_str}"
+            )
+        else:
+            lines.append(
+                f"Contact {top['name']} ({top['sid']}) first. "
+                f"They can deliver in {lead_days} days at {price_str}/unit "
+                f"and are {badge_str}.{email_str}"
+            )
 
         if is_emergency:
             lines.append(
