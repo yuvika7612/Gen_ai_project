@@ -84,14 +84,12 @@ genai_project/
 │   ├── 1_create_company_profile.py   # Creates company_profile.json
 │   ├── 1b_create_inventory.py        # Creates current_inventory.json
 │   ├── 2_generate_pharma_suppliers.py# Generates 100 supplier profiles CSV
-│   ├── 3_create_pharma_training.py   # Creates training JSONL (base 300)
+│   ├── 3_create_pharma_training.py   # Creates initial 50 training examples
+│   ├── 3.1_pharma_training_250_more.py # Creates additional 250 examples (total = 300)
 │   ├── 4_download_pharma_news.py     # Downloads news from GDELT API
 │   ├── 5_preprocess_pharma_news.py   # Cleans and categorizes news
-│   ├── 6_create_test_set.py          # Creates evaluation test set
 │   ├── 7_load_suppliers_to_rag.py    # Embeds suppliers into FAISS
 │   ├── 8_test_faiss_search.py        # Tests FAISS retrieval
-│   ├── 11a_collect_answers.py        # Collects agent answers for eval
-│   ├── 11b_evaluate_ragas.py         # RAGAS-style evaluation
 │   └── manual_eval.py                # Manual precision/recall evaluation
 │
 ├── data/
@@ -103,11 +101,8 @@ genai_project/
 │   ├── gdelt/
 │   │   ├── gdelt_pharma_raw.csv      # Raw downloaded news
 │   │   └── gdelt_pharma_clean.csv    # Cleaned, categorized, scored news
-│   ├── ragas/
-│   │   ├── ragas_testset.json        # 10 evaluation questions with ground truth
-│   │   └── ragas_answers.json        # Agent answers for evaluation
 │   └── training/
-│       └── pharma_training_300.jsonl # 300 fine-tuning examples (ChatML format)
+│       └── pharma_training_300.jsonl # 300 fine-tuning examples (50 base + 250 additional, ChatML format)
 │
 ├── database/
 │   └── faiss_suppliers/              # FAISS index files (pre-built)
@@ -158,14 +153,14 @@ If you need to regenerate all data, run the scripts in this order:
 python3 scripts/1_create_company_profile.py      # Step 1: Company JSON
 python3 scripts/1b_create_inventory.py           # Step 1b: Inventory JSON
 python3 scripts/2_generate_pharma_suppliers.py   # Step 2: 100 supplier profiles
-python3 scripts/3_create_pharma_training.py      # Step 3: Training data
-python3 scripts/4_download_pharma_news.py        # Step 4: Download GDELT news
-python3 scripts/5_preprocess_pharma_news.py      # Step 5: Clean news data
-python3 scripts/6_create_test_set.py             # Step 6: Evaluation test set
-python3 scripts/7_load_suppliers_to_rag.py       # Step 7: Build FAISS index
+python3 scripts/3_create_pharma_training.py         # Step 3a: Initial 50 training examples
+python3 scripts/3.1_pharma_training_250_more.py     # Step 3b: Additional 250 examples (total = 300)
+python3 scripts/4_download_pharma_news.py           # Step 4: Download GDELT news (needs internet)
+python3 scripts/5_preprocess_pharma_news.py         # Step 5: Clean and categorize news
+python3 scripts/7_load_suppliers_to_rag.py          # Step 6: Embed suppliers and build FAISS index
 ```
 
-> **Note:** Step 4 requires internet access. Steps 1-3 and 5-7 are fully offline.
+> **Note:** Step 4 requires internet access. All other steps are fully offline.
 
 ---
 
