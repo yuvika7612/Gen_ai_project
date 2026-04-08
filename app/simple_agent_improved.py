@@ -238,9 +238,18 @@ class PharmaSupplyChainAgent:
                                   ['cdsco', 'approved', 'regulatory', 'compliance'])
         requires_cold_chain = any(w in question_lower for w in
                                   ['insulin', 'vaccine', 'cold chain', 'temperature', 'refrigerat'])
-        requires_india      = 'india' in question_lower
+        # Only require India when query explicitly asks for Indian suppliers.
+        # Phrases like "our warehouse is in India" or "global sourcing" should NOT
+        # lock the search to India-only suppliers.
+        _global_override = any(p in question_lower for p in
+                               ['global sourcing', 'international', 'no domestic',
+                                'worldwide', 'outside india'])
+        requires_india      = 'india' in question_lower and not _global_override
+        # Only enforce fast lead-time when query explicitly asks for urgency.
+        # "fastest available delivery" without an emergency keyword should not
+        # disqualify all suppliers whose lead time is >21 days.
         requires_fast       = any(w in question_lower for w in
-                                  ['fast', 'urgent', 'quick', 'immediate', 'emergency'])
+                                  ['urgent', 'quick', 'immediate', 'emergency'])
 
         # Detect required product categories from query keywords
         required_categories = []
