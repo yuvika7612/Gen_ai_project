@@ -594,17 +594,24 @@ python scripts/6_create_test_set.py
                 with col2:
                     st.markdown(f"**Category:** {row['category']}")
                     st.markdown(f"**Urgency:** {row['urgency_score']}/5")
-
-                    if agent and st.button(f"🔍 Analyze Impact", key=f"analyze_{idx}"):
-                        with st.spinner("Analyzing..."):
-                            try:
-                                analysis = agent.ask(f"Analyze this pharmaceutical news and suggest suppliers: {row['headline']}")
-                                st.markdown("**AI Analysis:**")
-                                st.info(analysis)
-                            except Exception as e:
-                                st.error(f"Analysis failed: {str(e)}")
+                    analyze_clicked = agent and st.button(
+                        f"🔍 Analyze Impact", key=f"analyze_{idx}"
+                    )
 
                 st.markdown(f"[📰 Read Article]({row['url']})")
+
+                # AI analysis rendered full-width BELOW the columns
+                if agent and analyze_clicked:
+                    with st.spinner("Analyzing..."):
+                        try:
+                            analysis = agent.ask(
+                                f"Analyze this pharmaceutical news and suggest suppliers: {row['headline']}"
+                            )
+                            st.markdown("---")
+                            st.markdown("**🤖 AI Analysis:**")
+                            st.info(analysis)
+                        except Exception as e:
+                            st.error(f"Analysis failed: {str(e)}")
 
 # ============================================================
 # TAB 3: ANALYTICS DASHBOARD
