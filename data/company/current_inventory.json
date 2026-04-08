@@ -1,23 +1,8 @@
 {
-  "last_updated": "2026-03-13 10:40:28",
+  "last_updated": "2026-04-08 22:26:39",
   "warehouse_location": "Bangalore Main Warehouse",
   "total_inventory_value": "\u20b9350 crore",
   "products": {
-    "amoxicillin": {
-      "product_name": "Amoxicillin 500mg Tablets",
-      "category": "Antibiotics",
-      "current_stock": 2000000,
-      "unit": "tablets",
-      "monthly_demand": 1000000,
-      "days_of_supply": 60,
-      "status": "BELOW_TARGET",
-      "urgency": "MEDIUM",
-      "suppliers": [
-        "Cipla Ltd",
-        "Sun Pharma",
-        "Hetero Drugs"
-      ]
-    },
     "insulin_glargine": {
       "product_name": "Insulin Glargine 100 IU/mL",
       "category": "Diabetes",
@@ -31,7 +16,85 @@
         "Biocon",
         "Novo Nordisk",
         "Sanofi"
-      ]
+      ],
+      "sourcing": "india_available"
+    },
+    "atorvastatin": {
+      "product_name": "Atorvastatin 10mg Tablets",
+      "category": "Cardiac",
+      "current_stock": 800000,
+      "unit": "tablets",
+      "monthly_demand": 600000,
+      "days_of_supply": 40,
+      "status": "CRITICAL",
+      "urgency": "HIGH",
+      "suppliers": [
+        "Lupin Ltd",
+        "Dr Reddys",
+        "Torrent Pharma"
+      ],
+      "sourcing": "international_required"
+    },
+    "salbutamol": {
+      "product_name": "Salbutamol 100mcg Inhaler",
+      "category": "Respiratory",
+      "current_stock": 120000,
+      "unit": "inhalers",
+      "monthly_demand": 90000,
+      "days_of_supply": 40,
+      "status": "CRITICAL",
+      "urgency": "HIGH",
+      "suppliers": [
+        "GSK India",
+        "Cipla Respiratory"
+      ],
+      "sourcing": "india_available"
+    },
+    "hepatitis_b_vaccine": {
+      "product_name": "Hepatitis B Vaccine 1mL",
+      "category": "Vaccines",
+      "current_stock": 80000,
+      "unit": "vials",
+      "monthly_demand": 50000,
+      "days_of_supply": 48,
+      "status": "CRITICAL",
+      "urgency": "HIGH",
+      "suppliers": [
+        "Serum Institute",
+        "Bharat Biotech"
+      ],
+      "sourcing": "india_available"
+    },
+    "amoxicillin": {
+      "product_name": "Amoxicillin 500mg Tablets",
+      "category": "Antibiotics",
+      "current_stock": 2000000,
+      "unit": "tablets",
+      "monthly_demand": 1000000,
+      "days_of_supply": 60,
+      "status": "BELOW_TARGET",
+      "urgency": "MEDIUM",
+      "suppliers": [
+        "Cipla Ltd",
+        "Sun Pharma",
+        "Hetero Drugs"
+      ],
+      "sourcing": "geopolitical_risk"
+    },
+    "imatinib": {
+      "product_name": "Imatinib 400mg Capsules",
+      "category": "Oncology",
+      "current_stock": 150000,
+      "unit": "capsules",
+      "monthly_demand": 80000,
+      "days_of_supply": 56,
+      "status": "ADEQUATE",
+      "urgency": "LOW",
+      "suppliers": [
+        "Natco Pharma",
+        "Cipla Oncology"
+      ],
+      "sourcing": "india_preferred"
     },
     "paracetamol": {
       "product_name": "Paracetamol 500mg Tablets",
@@ -44,16 +107,60 @@
       "urgency": "LOW",
       "suppliers": [
         "Generic manufacturers"
-      ]
+      ],
+      "sourcing": "india_available"
+    },
+    "methotrexate": {
+      "product_name": "Methotrexate 2.5mg Tablets",
+      "category": "Oncology",
+      "current_stock": 500000,
+      "unit": "tablets",
+      "monthly_demand": 200000,
+      "days_of_supply": 75,
+      "status": "ADEQUATE",
+      "urgency": "LOW",
+      "suppliers": [
+        "Pfizer India",
+        "BDR Pharma"
+      ],
+      "sourcing": "india_preferred"
     }
   },
   "critical_alerts": [
     {
       "product": "insulin_glargine",
       "alert_type": "LOW_STOCK",
-      "message": "Insulin stock below target level",
+      "message": "Insulin Glargine 100 IU/mL stock critical \u2014 50 days remaining",
       "urgency": "HIGH",
-      "action_required": "Contact Biocon for urgent order"
+      "action_required": "Contact Biocon or Novo Nordisk for urgent order"
+    },
+    {
+      "product": "atorvastatin",
+      "alert_type": "LOW_STOCK",
+      "message": "Atorvastatin 10mg Tablets stock critical \u2014 40 days remaining",
+      "urgency": "HIGH",
+      "action_required": "No India CDSCO cardiac supplier \u2014 source internationally"
+    },
+    {
+      "product": "salbutamol",
+      "alert_type": "LOW_STOCK",
+      "message": "Salbutamol 100mcg Inhaler stock critical \u2014 40 days remaining",
+      "urgency": "HIGH",
+      "action_required": "Source from respiratory medicine suppliers urgently"
+    },
+    {
+      "product": "hepatitis_b_vaccine",
+      "alert_type": "LOW_STOCK",
+      "message": "Hepatitis B Vaccine 1mL stock critical \u2014 48 days remaining",
+      "urgency": "HIGH",
+      "action_required": "Contact Serum Institute or Bharat Biotech urgently"
+    },
+    {
+      "product": "amoxicillin",
+      "alert_type": "LOW_STOCK",
+      "message": "Amoxicillin 500mg Tablets stock below target \u2014 60 days remaining",
+      "urgency": "MEDIUM",
+      "action_required": "Reorder from domestic antibiotic manufacturers; China API ban risk"
     }
   ]
 }
